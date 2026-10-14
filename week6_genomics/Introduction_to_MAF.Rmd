@@ -1,0 +1,201 @@
+---
+title: "Introduction to MAF"
+author: Joshua Lin, Christopher Kim, Erika Li, Jeanne Revilla, Mahija Mogalipuvvu, adapted from Nicole Black, Wade Boohar
+date: 07/17/22
+updated: 10/12/2026
+---
+
+***Deliverables***
+- upload this R Notebook to your GitHub and submit the link to your Repo on Brightspace
+- include ALL graphs or figures created in this assignment in a folder with your R notebook with descriptive file names.
+
+We encourage you to work with a partner. Therefore, it is okay if your answers are the same as your partner’s as long as everyone understands it and could explain it in their own words if asked. Each person must individually push their code to Github. *If you do work with a partner, at the top of your R Notebook, write the name of you and your partner(s) as a comment.*
+
+***Complete the following coding activity and answer any following questions as comments in your R Notebook***
+
+In this assignment, you will need to use your skills learned in class to demonstrate your understanding of categorical variables and R data structures.
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = normalizePath("~/qbio_490/analysis_data", mustWork = FALSE))
+```
+
+*Pre-Assignment*
+Load all necessary packages, read in the clinical data.csv file you have in your analysis_data folder, and instantiate the MAF_object.
+```{r}
+# Name: Rei Shuen Ng
+
+if (!require("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+if (!require("TCGAbiolinks", quietly = TRUE)) BiocManager::install("TCGAbiolinks")
+if (!require("maftools", quietly = TRUE)) BiocManager::install("maftools")
+for (pkg in c("survival", "survminer", "ggplot2")) if (!require(pkg, character.only = TRUE)) install.packages(pkg)
+
+library(TCGAbiolinks)
+library(maftools)
+library(survival)
+library(survminer)
+library(ggplot2)
+
+# Local paths: change these two lines if your folders are elsewhere
+data_dir <- normalizePath("~/qbio_490/analysis_data", mustWork = FALSE)   # TCGA data (outside the repo)
+fig_dir  <- normalizePath("~/qbio_490/qbio_490_reishuen_ng/week6_genomics", mustWork = FALSE) # this notebook's folder; figures go here
+dir.create(file.path(fig_dir, "figures"), showWarnings = FALSE)
+
+clinic <- read.csv(file.path(data_dir, "brca_clinical_data.csv"))
+colnames(clinic)[colnames(clinic) == "bcr_patient_barcode"] <- "Tumor_Sample_Barcode" # only needed if not renamed before saving
+
+maf_query <- GDCquery(project = "TCGA-BRCA",
+                      data.category = "Simple Nucleotide Variation",
+                      access = "open",
+                      data.type = "Masked Somatic Mutation",
+                      workflow.type = "Aliquot Ensemble Somatic Variant Merging and Masking")
+GDCdownload(maf_query, method = "api", files.per.chunk = 50, directory = file.path(data_dir, "GDCdata"))
+maf <- GDCprepare(maf_query, directory = file.path(data_dir, "GDCdata"))
+
+MAF_object <- read.maf(maf = maf, clinicalData = clinic, isTCGA = TRUE)
+```
+
+It's useful to save your MAF_object, so that you don't have to go through the trouble of querying and preparing it everytime. The saveRDS function allows us to save an R object, allowing us to access it directly from our files. 
+```{r}
+saveRDS(MAF_object, file = file.path(data_dir, "maf_object.rds"))
+```
+
+When you reopen a new R session and want to access your MAF_object, you can use the readRDS function to load the object back into a new variable.
+```{r}
+MAF_object <- readRDS(file = file.path(data_dir, "maf_object.rds"))
+```
+
+*1*
+Choose a clinical variable (or any variable from clin_rad or clin_drug) to separate your populations into two different groups and rewrite the column or create a new column with that variable as a factor. ***Do not use age or vital_status as your clinical variable.*** Hint: if your variable is continuous, you will need to determine your own cutoffs for the different levels of the factor. If your variable is categorical and has more than two possible values, choose the two that are the most common.
+```{r}
+# Variable: estrogen receptor status by IHC (er_status_by_ihc). Two most common values: Positive, Negative.
+# Everything else ("Indeterminate", "[Not Evaluated]", etc.) becomes NA and is left out of the comparison.
+MAF_object@clinical.data$ER_status <- factor(
+  ifelse(MAF_object@clinical.data$er_status_by_ihc %in% c("Positive", "Negative"),
+         MAF_object@clinical.data$er_status_by_ihc, NA),
+  levels = c("Positive", "Negative"))
+
+table(MAF_object@clinical.data$ER_status, useNA = "ifany")
+```
+
+
+*2*
+Create a co-oncoplot with the top 10-20 (you choose) most mutated genes for the two groups. Pick one that has a large discrepancy in % mutated or type of mutations between the groups and research it. 
+Research it. What is the gene used for? Can you think of any reason for the discrepancy?
+```{r}
+er_pos_barcodes <- MAF_object@clinical.data$Tumor_Sample_Barcode[MAF_object@clinical.data$ER_status == "Positive" & !is.na(MAF_object@clinical.data$ER_status)]
+er_neg_barcodes <- MAF_object@clinical.data$Tumor_Sample_Barcode[MAF_object@clinical.data$ER_status == "Negative" & !is.na(MAF_object@clinical.data$ER_status)]
+
+er_pos_maf <- subsetMaf(maf = MAF_object, tsb = er_pos_barcodes)
+er_neg_maf <- subsetMaf(maf = MAF_object, tsb = er_neg_barcodes)
+
+top_genes <- getGeneSummary(MAF_object)$Hugo_Symbol[1:15]
+
+png(file.path(fig_dir, "figures", "coOncoplot_top15_ER_pos_vs_neg.png"), width = 1400, height = 900, res = 120)
+coOncoplot(m1 = er_pos_maf, m2 = er_neg_maf,
+           m1Name = "ER-positive", m2Name = "ER-negative",
+           genes = top_genes, borderCol = NA)
+dev.off()
+
+coOncoplot(m1 = er_pos_maf, m2 = er_neg_maf,
+           m1Name = "ER-positive", m2Name = "ER-negative",
+           genes = top_genes, borderCol = NA)
+
+# Chosen gene: TP53 (check the plot: it should be mutated in a much larger % of ER-negative tumors; PIK3CA goes the other way).
+# TP53 encodes p53, a tumor suppressor transcription factor that responds to DNA damage by arresting the cell cycle,
+# triggering DNA repair, or inducing apoptosis ("guardian of the genome"). Loss of p53 lets genomically unstable cells keep dividing.
+# Why the discrepancy: ER-negative tumors are enriched for the basal-like / triple-negative subtype, which is driven by
+# genomic instability rather than estrogen signaling, and TP53 loss is a hallmark of that subtype. ER-positive (luminal)
+# tumors depend on estrogen-receptor signaling for growth and more often carry PIK3CA/GATA3 mutations instead.
+```
+
+
+*3*
+Create a contingency table with your variable and chosen gene. Run a Fisher’s Exact Test between presence of mutations for that gene and your clinical variable. Create and save a mosaic plot. 
+Interpret the output of the Fisher’s Exact Test in terms of the odds ratio and p-value.
+```{r}
+tp53_mutated_barcodes <- unique(MAF_object@data$Tumor_Sample_Barcode[MAF_object@data$Hugo_Symbol == "TP53"])
+
+clin_er <- MAF_object@clinical.data[!is.na(MAF_object@clinical.data$ER_status), ]
+clin_er$TP53_status <- factor(ifelse(clin_er$Tumor_Sample_Barcode %in% tp53_mutated_barcodes, "Mutated", "Wild-type"),
+                              levels = c("Mutated", "Wild-type"))
+
+contig <- table(clin_er$ER_status, clin_er$TP53_status)
+contig
+
+fisher_test <- fisher.test(contig)
+fisher_test
+
+png(file.path(fig_dir, "figures", "mosaic_ER_status_vs_TP53.png"), width = 900, height = 800, res = 120)
+mosaicplot(contig, main = "ER status vs. TP53 mutation", xlab = "ER status", ylab = "TP53 status", color = c("salmon", "lightblue"))
+dev.off()
+
+mosaicplot(contig, main = "ER status vs. TP53 mutation", xlab = "ER status", ylab = "TP53 status", color = c("salmon", "lightblue"))
+
+cat("Fisher's exact test: odds ratio =", signif(fisher_test$estimate, 3), ", p-value =", signif(fisher_test$p.value, 3), "\n")
+# Interpretation:
+# Rows are ER-positive then ER-negative; columns are Mutated then Wild-type, so the odds ratio compares the odds of a TP53
+# mutation in ER-positive vs ER-negative patients. An odds ratio well below 1 means ER-positive patients have much lower odds
+# of carrying a TP53 mutation (equivalently, ER-negative patients have ~1/OR times higher odds). A p-value < 0.05 means this
+# association is very unlikely to be due to chance, so TP53 mutation status and ER status are not independent.
+```
+
+
+*4*
+Subset your maf_object based on your chosen clinical variable and create a co-lollipop plot of your chosen gene divided between the two different clinical variable possibilities. Include descriptive names on your plot.
+Do you notice any difference in terms of mutations (e.g. sites, types, number) between the two populations?
+```{r}
+png(file.path(fig_dir, "figures", "colollipop_TP53_ER_pos_vs_neg.png"), width = 1400, height = 800, res = 120)
+lollipopPlot2(m1 = er_pos_maf, m2 = er_neg_maf,
+              m1_name = "ER-positive", m2_name = "ER-negative",
+              gene = "TP53")
+dev.off()
+
+lollipopPlot2(m1 = er_pos_maf, m2 = er_neg_maf,
+              m1_name = "ER-positive", m2_name = "ER-negative",
+              gene = "TP53")
+
+# Observations (check against your plot):
+# - Number: ER-negative tumors carry many more TP53 mutations overall.
+# - Sites: in both groups mutations cluster in the DNA-binding domain (roughly residues 100-300), including the classic
+#   hotspots (e.g. R175, R248, R273).
+# - Types: ER-negative tumors show more truncating mutations (nonsense, frameshift, splice site) relative to missense,
+#   consistent with complete loss of p53 function.
+```
+
+
+*5*
+Create your Overall_Survival_Status column and create a mafSurvival KM plot based on mutations in your chosen gene.
+Does there seem to be a difference? Hypothesize why or not based on the other analysis you did with the gene above.
+```{r}
+MAF_object@clinical.data$survival_time <- suppressWarnings(as.numeric(
+  ifelse(MAF_object@clinical.data$death_days_to == "[Not Applicable]",
+         MAF_object@clinical.data$last_contact_days_to,
+         MAF_object@clinical.data$death_days_to)))
+
+MAF_object@clinical.data$Overall_Survival_Status <- ifelse(MAF_object@clinical.data$vital_status == "Dead", TRUE, FALSE)
+
+surv_df <- MAF_object@clinical.data[!is.na(MAF_object@clinical.data$survival_time), ]
+surv_df$TP53_mut <- surv_df$Tumor_Sample_Barcode %in% tp53_mutated_barcodes
+tp53_surv_p <- 1 - pchisq(survdiff(Surv(survival_time, Overall_Survival_Status) ~ TP53_mut, data = surv_df)$chisq, df = 1)
+
+png(file.path(fig_dir, "figures", "mafSurvival_TP53.png"), width = 1000, height = 800, res = 120)
+mafSurvival(maf = MAF_object,
+            genes = "TP53",
+            time = "survival_time",
+            Status = "Overall_Survival_Status",
+            isTCGA = TRUE)
+dev.off()
+
+mafSurvival(maf = MAF_object,
+            genes = "TP53",
+            time = "survival_time",
+            Status = "Overall_Survival_Status",
+            isTCGA = TRUE)
+
+cat("Log-rank p-value, TP53 mutant vs wild-type:", signif(tp53_surv_p, 3), "\n")
+# Is there a difference? See the p-value printed above and on the plot (p < 0.05 = significant difference).
+# Hypothesis: TP53-mutant patients would be expected to do worse, since TP53 mutations are concentrated in ER-negative /
+# triple-negative tumors, which are more aggressive and can't be treated with hormone therapy. If the curves separate only
+# modestly or p > 0.05, a likely reason is that TCGA-BRCA follow-up is short and has few death events, and that TP53 status is
+# confounded with subtype and treatment; the survival effect may be driven more by ER status than by TP53 itself.
+```

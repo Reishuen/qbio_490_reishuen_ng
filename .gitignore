@@ -1,0 +1,9 @@
+### TCGA Data
+GDCdata
+MANIFEST*
+htseq_h5*
+analysis_data
+.Rhistory
+.RData
+.Rproj.user
+.DS_Store
