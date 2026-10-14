@@ -1,0 +1,96 @@
+---
+title: "r_data_loading"
+author: "Rei Shuen Ng"
+---
+
+```{r setup}
+knitr::opts_knit$set(root.dir = normalizePath("~/qbio_490/analysis_data"))
+```
+
+```{r}
+library(BiocManager)
+library(TCGAbiolinks)
+library(maftools)
+
+# Saves an image of an R command and its printed output (for the Brightspace "screenshot" deliverable)
+shot_dir <- normalizePath("~/qbio_490/part2_screenshots", mustWork = FALSE)
+dir.create(shot_dir, showWarnings = FALSE)
+save_output_png <- function(code_lines, obj, file) {
+  old <- options(width = 160); on.exit(options(old))
+  lines <- c(paste0("> ", code_lines), capture.output(print(obj)))
+  lines <- substr(lines, 1, 160)
+  png(file.path(shot_dir, file), width = 1500, height = 40 + 15 * length(lines), res = 100, bg = "white")
+  par(mar = c(0, 0, 0, 0)); plot.new()
+  text(0.005, 1 - (seq_along(lines) - 0.5) / length(lines), lines, adj = 0, family = "mono", cex = 0.62)
+  dev.off()
+}
+```
+
+Clinical data
+
+```{r}
+clin_query <- GDCquery(project = "TCGA-BRCA",
+                       data.category = "Clinical",
+                       data.type = "Clinical Supplement",
+                       data.format = 'BCR Biotab')
+GDCdownload(clin_query)
+clinical.BCRtab.all <- GDCprepare(clin_query)
+clinic <- clinical.BCRtab.all$clinical_patient_brca[-c(1,2),]
+```
+
+```{r}
+#Rei Shuen Ng
+head(clinic)
+save_output_png(c("#Rei Shuen Ng", "head(clinic)"), head(clinic), "1_head_clinic.png")
+```
+
+Mutation data
+
+```{r}
+colnames(clinic)[ colnames(clinic) == "bcr_patient_barcode" ] <- "Tumor_Sample_Barcode"
+
+maf_query <- GDCquery(
+  project = "TCGA-BRCA",
+  data.category = "Simple Nucleotide Variation",
+  access = "open",
+  data.type = "Masked Somatic Mutation",
+  workflow.type = "Aliquot Ensemble Somatic Variant Merging and Masking"
+)
+GDCdownload(maf_query, method = "api", files.per.chunk = 100)
+maf <- GDCprepare(maf_query)
+maf_object <- read.maf(maf = maf,
+                       clinicalData = clinic,
+                       isTCGA = TRUE)
+```
+
+```{r}
+#Rei Shuen Ng
+maf_head <- tryCatch(head(maf_object), error = function(e) head(maf_object@data))
+maf_head
+save_output_png(c("#Rei Shuen Ng", "head(maf_object)"), maf_head, "2_head_maf_object.png")
+```
+
+RNA-seq data
+
+```{r}
+rna_query <- GDCquery(project = "TCGA-BRCA",
+                      data.category = "Transcriptome Profiling",
+                      data.type = "Gene Expression Quantification",
+                      workflow.type = "STAR - Counts")
+# Download in small batches and retry: large batches sometimes come back as an error instead of a tar archive.
+# Files already downloaded are skipped on each retry.
+for (attempt in 1:15) {
+  ok <- tryCatch({ GDCdownload(rna_query, method = "api", files.per.chunk = 10); TRUE },
+                 error = function(e) { message("Download attempt ", attempt, " failed: ", conditionMessage(e)); FALSE })
+  if (ok) break
+  Sys.sleep(10)
+}
+rna_se <- GDCprepare(rna_query)
+```
+
+```{r}
+#Rei Shuen Ng
+rna_head <- head(rna_se)
+rna_head
+save_output_png(c("#Rei Shuen Ng", "head(rna_se)"), rna_head, "3_head_rna_se.png")
+```
